@@ -1,4 +1,7 @@
+
+
 import java.util.ArrayList;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
@@ -15,43 +18,75 @@ public class MaxCliqueFinder {
     private final Set<Integer> Q = new TreeSet<>();
     private final Set<Integer> Qmax = new TreeSet<>();
     
-    private int maxDegree = 0; 
     
     private List<List<Integer> > adjacentVertices;
+    
+    private int stepsNum = 0;
     
     public MaxCliqueFinder(Graph graph) {
         this.graph = graph;
     }
     
-    public Set<Integer> find() {
-        List<Integer> R = new ArrayList<>(graph.getSize());
+    public int getLastFindStepsNum() {
+        return stepsNum;
+    }
+    
+    public Set<Integer> findBasic() {
+        return find((R, No) -> {
+            maxClique(R, No);
+        });
+    }
+    
+    public Set<Integer> findWithColorSort() {
+        return find((R, No) -> {
+            maxCliqueWithColorSort(R, No);
+        });
+    }
+    
+    public Set<Integer> findByMCD(double limit) {
+        return find((R, No) -> {
+            maxCliqueDyn(R, No, new HashMap<>(), new HashMap<>(), 1, limit);
+        });
+    }
+    
+    private Set<Integer> find(FindHandler handler) {
+        stepsNum = 0;
+        Q.clear();
+        Qmax.clear();
+        List<Integer> RList =  new ArrayList<>(graph.getSize());
         List<Integer> degrees = new ArrayList<>(graph.getSize());
         
         for (int i = 1; i <= graph.getSize(); ++i) {
-            R.add(i);
+            RList.add(i);
             degrees.add(getDegree(i));
         }
         
         
-        R.sort((first, second) -> {
-            return degrees.get(first - 1) - degrees.get(second - 1);
+        RList.sort((first, second) -> {
+            return degrees.get(second - 1) - degrees.get(first - 1);
         });
         
-        maxDegree = Collections.max(degrees);
+        Map<Integer, Integer> R = new HashMap<>(graph.getSize());
         
-        List<Integer> No = new ArrayList<>(Collections.nCopies(graph.getSize(), 0));
-        
-        for (int i = 0; i < maxDegree; ++i) {
-            No.set(R.get(i) - 1, i + 1); 
+        for (int i = 1; i <= RList.size(); ++i) {
+            R.put(i, RList.get(i - 1));
         }
         
-        for (int i = maxDegree; i < graph.getSize(); ++i) {
-            No.set(R.get(i) - 1, maxDegree + 1); 
+        int maxDegree = Collections.max(degrees);
+        
+        Map<Integer, Integer> No = new HashMap<>(graph.getSize());
+        
+        for (int i = 1; i <= maxDegree; ++i) {
+            No.put(i, i + 1); 
+        }
+        
+        for (int i = maxDegree + 1; i <= graph.getSize(); ++i) {
+            No.put(i, maxDegree + 1); 
         }
         
         createAdjacentVertices();
         
-        expand(R, No);
+        handler.process(R, No);
         
         return Qmax;
     }
@@ -60,21 +95,36 @@ public class MaxCliqueFinder {
         return IntStream.of(graph.getAdjacencyMatrix()[vertexIndex - 1]).sum();
     }
     
-    private void expand(List<Integer> R, List<Integer> No) {
+    private int getDegree(int vertexIndex, Map<Integer, Integer> R) {
+        int degreeSum = 0;
+        int[] array = graph.getAdjacencyMatrix()[vertexIndex - 1];
+        
+        for (int i = 0; i < array.length; ++i) {
+            if (!R.containsValue(i + 1)) {
+                continue;
+            }
+            
+            degreeSum += array[i];
+        }
+        
+        return degreeSum;
+    }
+    
+    private void maxClique(Map<Integer, Integer> R, Map<Integer, Integer> No) {
+        ++stepsNum;
         while (!R.isEmpty()) {
             
             int vertexIndex = getVertexIndexWithMaxNo(R, No);
-            int vertex = R.get(vertexIndex);
-            R.remove(vertexIndex);
+            int vertex = R.remove(vertexIndex);
             
             if (Q.size() + No.get(vertexIndex) > Qmax.size()) {
                 Q.add(vertex);
-                List<Integer> intersection = createIntersection(R, adjacentVertices.get(vertex - 1));
+                Map<Integer, Integer> intersection = createIntersection(R, adjacentVertices.get(vertex - 1));
                 
                 if (!intersection.isEmpty()) {
-                    List<Integer> newNo = new ArrayList<>(Collections.nCopies(intersection.size(), 0));
+                    Map<Integer, Integer> newNo = new HashMap<>(intersection.size());
                     makeNumberSort(intersection, newNo);
-                    expand(intersection, newNo);
+                    maxClique(intersection, newNo);
                 } else if (Q.size() > Qmax.size()) {
                     Qmax.clear();
                     Qmax.addAll(Q);
@@ -87,18 +137,122 @@ public class MaxCliqueFinder {
         }
     }
     
-    public int getVertexIndexWithMaxNo(List<Integer> R, List<Integer> No) {
-        int maxNo = 0;
-	int vertexIndex = 0;
+    private void maxCliqueWithColorSort(Map<Integer, Integer> R, Map<Integer, Integer> No) {
+        ++stepsNum;
+        while (!R.isEmpty()) {
+            int vertexIndex = getVertexIndexWithMaxNo(R, No);
+            int vertex = R.remove(vertexIndex);
+            
+            if (Q.size() + No.get(vertexIndex) > Qmax.size()) {
+                Q.add(vertex);
+                Map<Integer, Integer> intersection = createIntersection(R, adjacentVertices.get(vertex - 1));
+                
+                if (!intersection.isEmpty()) {
+                    Map<Integer, Integer> newNo = new HashMap<>(intersection.size());
+                    makeColorSort(intersection, newNo);
+                    maxCliqueWithColorSort(intersection, newNo);
+                } else if (Q.size() > Qmax.size()) {
+                    Qmax.clear();
+                    Qmax.addAll(Q);
+                } 
+                
+                Q.remove(vertex);
+            } else {
+                return;
+            }
+        }
+    }
+    
+    private void maxCliqueDyn(
+            Map<Integer, Integer> R, 
+            Map<Integer, Integer> No,
+            Map<Integer, Integer> S,
+            Map<Integer, Integer> oldS,
+            int level,
+            double limit) {
+        S.put(level, S.getOrDefault(level, 0) + S.getOrDefault(level - 1, 0) - oldS.getOrDefault(level, 0));
+        oldS.put(level, S.getOrDefault(level - 1, 0));
         
-	for (int i = 0; i < R.size(); ++i) {
-            if (No.get(i) > maxNo) {
-                vertexIndex = i;
-                maxNo = No.get(i);
+        Map<Integer, Integer> degrees = new HashMap<>();
+        List<Integer> fakeR = new ArrayList<>();
+        while (!R.isEmpty()) {
+            int vertexIndex = getVertexIndexWithMaxNo(R, No);
+            int vertex = R.remove(vertexIndex);
+            
+            if (Q.size() + No.get(vertexIndex) > Qmax.size()) {
+                Q.add(vertex);
+                Map<Integer, Integer> intersection = createIntersection(R, adjacentVertices.get(vertex - 1));
+                
+                if (!intersection.isEmpty()) {
+                    if ((double)S.getOrDefault(level, 0)/stepsNum < limit) {
+                        degrees.clear();
+                        fakeR.clear();
+                        for (Map.Entry<Integer, Integer> entry : intersection.entrySet()) {
+                            degrees.put(entry.getValue(), getDegree(entry.getValue(), intersection));
+                            fakeR.add(entry.getValue());
+                        }
+                        
+                        Collections.sort(fakeR, (first, second) -> {
+                            return degrees.get(second) - degrees.get(first);
+                        });
+                        
+                        for (int i = 0; i < intersection.size(); ++i) {
+                            intersection.replace(i + 1, fakeR.get(i));
+                        }
+                    }
+                    Map<Integer, Integer> newNo = new HashMap<>(intersection.size());
+                    makeColorSort(intersection, newNo);
+                    S.put(level, S.getOrDefault(level, 0) + 1);
+                    ++stepsNum;
+                    maxCliqueWithColorSort(intersection, newNo);
+                } else if (Q.size() > Qmax.size()) {
+                    Qmax.clear();
+                    Qmax.addAll(Q);
+                } 
+                
+                Q.remove(vertex);
+            } else {
+                return;
+            }
+        }
+    }
+    
+    public int getVertexIndexWithMaxNo(Map<Integer, Integer> R, Map<Integer, Integer> No) {
+        int vertexIndex = 0;
+        Map.Entry<Integer, Integer> maxEntry = null;
+	for (Map.Entry<Integer, Integer> entry : No.entrySet())
+        {
+            if (!R.containsKey(entry.getKey())) {
+                continue;
+            }
+            
+            if (maxEntry == null || entry.getValue().compareTo(maxEntry.getValue()) > 0) {
+                maxEntry = entry;
             }
         }
         
+        if (maxEntry != null) {
+            vertexIndex = maxEntry.getKey();
+        }
         return vertexIndex;
+    }
+    
+    public Map<Integer, Integer> createIntersection(Map<Integer, Integer> first, List<Integer> second) {
+        Map<Integer, Integer> intersection = new HashMap<>();
+        return createIntersection(first, second, intersection);
+    }
+    
+    public Map<Integer, Integer> createIntersection(Map<Integer, Integer> first, List<Integer> second, Map<Integer, Integer> intersection) {
+        int i = 1;
+       
+        for (Map.Entry<Integer, Integer> entry : first.entrySet())
+            if (second.contains(entry.getValue())) {
+                intersection.put(i, entry.getValue());
+                ++i;
+            }
+            
+
+        return intersection;
     }
     
     public List<Integer> createIntersection(List<Integer> first, List<Integer> second) {
@@ -129,20 +283,21 @@ public class MaxCliqueFinder {
         }
     }
     
-    public void makeNumberSort(List<Integer> R, List<Integer> No) {
-        if (R == null || No == null || R.size() != No.size()) {
+    public void makeNumberSort(Map<Integer, Integer> R, Map<Integer, Integer> No) {
+        if (R == null || No == null) {
             return;
         }
+        
+        Map<Integer, Integer> fakeNo = new HashMap<>();
         
         int maxNo = 0;
         Map<Integer, List<Integer> > C = new HashMap<>();
         
-        int rIndex = 0;
-        while(rIndex < R.size()) {
-            int vertex = R.get(rIndex);
+        List<Integer> intersection = new ArrayList<>();
+        for (Map.Entry<Integer, Integer> entry : R.entrySet()) {
+            int vertex = entry.getValue();
             int k = 1;
             
-            List<Integer> intersection = new ArrayList<>();
             while (maxNo >= k) {
                 intersection.clear();
                 if (createIntersection(C.get(k), adjacentVertices.get(vertex - 1), intersection).isEmpty()) {
@@ -162,18 +317,79 @@ public class MaxCliqueFinder {
                 C.put(k, Ck);
             }
             
-            No.set(R.indexOf(vertex), k);
+            fakeNo.put(vertex, k);
             Ck.add(vertex);
-            
-            ++rIndex;
         }
         
-        int i = 0;
+        int i = 1;
         for (Map.Entry<Integer, List<Integer>> entry : C.entrySet()) {
             for (int j = 0; j < entry.getValue().size(); ++j) {
-                R.set(i, entry.getValue().get(j));
+                int vertex = entry.getValue().get(j);
+                R.put(i, vertex);
+                No.put(i, fakeNo.get(vertex));
                 ++i;
             }
         }
+    }
+    
+    public void makeColorSort(Map<Integer, Integer> R, Map<Integer, Integer> No) {
+        if (R == null || No == null) {
+            return;
+        }
+        
+        int maxNo = 0;
+        int minK = Qmax.size() - Q.size() + 1;
+        if (minK <= 0) minK = 1;
+        
+        int j = 1;
+        
+        Map<Integer, List<Integer> > C = new HashMap<>();
+        
+        List<Integer> intersection = new ArrayList<>();
+        for (Map.Entry<Integer, Integer> entry : R.entrySet()) {
+            int vertex = entry.getValue();
+            int k = 1;
+            
+            while (maxNo >= k) {
+                intersection.clear();
+                if (createIntersection(C.get(k), adjacentVertices.get(vertex - 1), intersection).isEmpty()) {
+                    break;
+                }
+                
+                ++k;
+            }
+            
+            if (k > maxNo) {
+		maxNo = k;
+            }
+            
+            List<Integer> Ck = C.get(k);
+            if (Ck == null) {
+                Ck = new ArrayList<>();
+                C.put(k, Ck);
+            }
+            
+            Ck.add(vertex);
+            
+            if (k < minK) {
+                R.replace(j, vertex);
+                ++j;
+            }
+        }
+        
+        No.put(j - 1, 0);
+        
+        for (int k = minK; k <= maxNo; ++k) {
+            List<Integer> Ck = C.get(k);
+            for (int g = 0; g < Ck.size(); ++g) {
+                R.put(j, Ck.get(g));
+                No.put(j, k);
+                ++j;
+            }
+        }
+    }
+    
+    private interface FindHandler {
+        public void process(Map<Integer, Integer> R, Map<Integer, Integer> No);
     }
 }
